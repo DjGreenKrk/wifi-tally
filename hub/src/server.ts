@@ -27,12 +27,19 @@ import WebTallyDriver from './tally/WebTallyDriver'
 import { DefaultTallyConfiguration, TallyConfiguration } from './tally/TallyConfiguration'
 import NodeMcuConnector from './flasher/NodeMcuConnector'
 import VmixProjectManager from './lib/VmixProjectManager'
+import registerCompanionApi from './mixer/companion/CompanionApi'
 
 const argv = yargs.argv
 if (argv.env !== undefined) {
   // @ts-ignore @TODO: setting the env is not nice, but the easiest way to be cross-platform compatible
   // @see https://github.com/wifi-tally/wifi-tally/issues/18
   process.env.NODE_ENV = argv.env
+} else if ((process as NodeJS.Process & { pkg?: unknown }).pkg) {
+  // A pkg-built EXE contains its own frontend, not the React dev server.
+  // Default to production so launching vtally.exe directly does not proxy to :3001.
+  // Assign through Object.assign to preserve runtime behavior without writing
+  // directly to the readonly NODE_ENV declaration in the TypeScript types.
+  Object.assign(process.env, { NODE_ENV: 'production' })
 }
 if (argv['with-test'] !== undefined) {
   process.env.HUB_WITH_TEST = "true"
@@ -59,6 +66,9 @@ const myWebTallyDriver = new WebTallyDriver(myConfiguration, myTallyContainer)
 
 const myMixerDriver = new MixerDriver(myConfiguration, myEmitter)
 const myVmixProjectManager = new VmixProjectManager(myConfiguration, myTallyContainer, myEmitter)
+
+// Register before the frontend catch-all / development proxy routes.
+registerCompanionApi(app, myMixerDriver)
 
 const myNodeMcuConnector = new NodeMcuConnector()
 
@@ -272,6 +282,11 @@ io.on('connection', (socket: ServerSideSocket) => {
     }
   })
   socket.on('config.change.null', newMixerName => {
+    if (newMixerName) {
+      myConfiguration.setMixerSelection(newMixerName)
+    }
+  })
+  socket.on('config.change.companion', newMixerName => {
     if (newMixerName) {
       myConfiguration.setMixerSelection(newMixerName)
     }

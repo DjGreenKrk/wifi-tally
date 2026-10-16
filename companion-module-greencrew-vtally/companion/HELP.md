@@ -1,0 +1,38 @@
+# GreenCrew vTally — Companion 5
+
+Connects Bitfocus Companion to a **local or remote vTally Hub**. Remote LAN connections require a Hub access token.
+
+## Setup
+
+1. Start the updated vTally Hub and choose **Companion (HTTP)** as the mixer source.
+2. Load this module through Companion's **Developer Modules Path**, or import a built module package.
+3. Add the **GreenCrew vTally** connection in Companion. Set the Hub host/IP, port (default **3000**), camera count (1–8), and optional LAN access token.
+4. Drag the ready-made Program/Preview camera presets onto buttons, or add individual actions.
+
+The default local endpoint is `http://127.0.0.1:<port>/api/companion/tally`. A remote Hub requires `VTALLY_COMPANION_TOKEN` on the Hub and the matching token in this module. LAN transport is plain HTTP: use only a trusted, isolated network or secure tunnel. See the module README for setup.
+
+For source-driven operation (OBS/ATEM/vMix), trigger **Sync Program + Preview from Companion variables** when either upstream Program or Preview variable changes, and map exact source values to camera IDs. Do not use stale feedback-derived local variables as the source of truth.
+
+## Actions
+
+- **Set Program camera** — selects a camera as Program (red).
+- **Set Preview camera** — selects a camera as Preview (green).
+- **Clear one camera** — removes it from both lists.
+- **TAKE** — swaps the Program/Preview lists.
+- **Clear all** — blanks every tally.
+- **Set full snapshot** — lists of camera IDs 1–8, separated by commas. Allows multiple Program/Preview cameras.
+- **Sync Program + Preview from Companion variables** — atomically maps upstream Program/Preview source values to configured camera IDs.
+
+## Feedback & variables
+
+Program, Preview and Hub connection feedback use the latest **HTTP-acknowledged** state. Variables: `connected`, `programs`, `previews` and `cam_1` through `cam_8`.
+
+## Heartbeat & safety
+
+The module sends a full snapshot to the Hub every **1 second**. The Hub marks Program/Preview **UNKNOWN** if **no snapshot is received for 4 seconds** (blue operator tally warning).
+
+**Important:** after a timeout, the real switcher's on-air camera is *unknown*, not necessarily OFF. An UNKNOWN warning is not a guarantee that the camera is off-air.
+
+This module controls the vTally state. It does **not automatically observe OBS, ATEM or vMix**. If other devices/software can change the real switcher's Program/Preview, configure the corresponding Companion actions or triggers to send the actual state. Do not treat manual tally buttons as authoritative real-world on-air detection.
+
+On module startup or a connection-config change, the initial state is empty rather than restoring a potentially stale Program camera.
