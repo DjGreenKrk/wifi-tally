@@ -39,7 +39,8 @@ class UdpTallyDriver {
                     this.container.addLog(tallyName, "udp", log)
                 } else {
                     // typescript should complain if we missed a command
-                    ((_: never) => {})(command)
+                    const unreachable: never = command
+                    throw new Error(`Unsupported tally command: ${String(unreachable)}`)
                 }
             } catch (e) {
                 if (e instanceof InvalidCommandError) {
@@ -94,7 +95,7 @@ class UdpTallyDriver {
     }
     private tallyReported(tallyName: string, rinfo: dgram.RemoteInfo) {
         this.lastTallyReport.set(tallyName, new Date())
-        let tally = this.container.getOrCreate(tallyName, "udp") as UdpTally
+        const tally = this.container.getOrCreate(tallyName, "udp") as UdpTally
         const oldState = tally.state
         const oldAddress = tally.address
         const oldPort = tally.port

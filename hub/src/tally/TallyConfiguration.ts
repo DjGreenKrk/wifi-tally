@@ -13,16 +13,17 @@ export type TallyConfigurationObjectType = {
  * representation of the default values if an individual tally does not override them
  */
 export class DefaultTallyConfiguration {
+  // Declare static defaults before instance field initializers for TypeScript 6.
+  static readonly defaultColorScheme : ColorSchemeId = DefaultColorScheme.id
+  static readonly minOperatorLightBrightness = 1
+  static readonly defaultBrightness = 100
+
   private _stageLightBrightness: number = DefaultTallyConfiguration.defaultBrightness
   private _stageColorScheme: ColorSchemeId = DefaultTallyConfiguration.defaultColorScheme
   private _operatorLightBrightness?: number = DefaultTallyConfiguration.defaultBrightness
   private _operatorColorScheme: ColorSchemeId = DefaultTallyConfiguration.defaultColorScheme
   private _stageShowsPreview: boolean = true
   private _operatorShowsIdle: boolean = true
-
-  static readonly defaultColorScheme : ColorSchemeId = DefaultColorScheme.id
-  static readonly minOperatorLightBrightness = 1
-  static readonly defaultBrightness = 100
 
   getStageLightBrightness() { return this._stageLightBrightness }
   setStageLightBrightness(value: number) { 
@@ -67,12 +68,12 @@ export class DefaultTallyConfiguration {
     }
   }
   fromJson(valueObject: TallyConfigurationObjectType) {
-    valueObject.opBrightness !== undefined && this.setOperatorLightBrightness(valueObject.opBrightness)
-    valueObject.stBrightness !== undefined && this.setStageLightBrightness(valueObject.stBrightness)
-    valueObject.stColor !== undefined && this.setStageColorScheme(valueObject.stColor)
-    valueObject.opColor !== undefined && this.setOperatorColorScheme(valueObject.opColor)
-    valueObject.stPreview !== undefined && this.setStageShowsPreview(valueObject.stPreview)
-    valueObject.opIdle !== undefined && this.setOperatorShowsIdle(valueObject.opIdle)
+    if (valueObject.opBrightness !== undefined) this.setOperatorLightBrightness(valueObject.opBrightness)
+    if (valueObject.stBrightness !== undefined) this.setStageLightBrightness(valueObject.stBrightness)
+    if (valueObject.stColor !== undefined) this.setStageColorScheme(valueObject.stColor)
+    if (valueObject.opColor !== undefined) this.setOperatorColorScheme(valueObject.opColor)
+    if (valueObject.stPreview !== undefined) this.setStageShowsPreview(valueObject.stPreview)
+    if (valueObject.opIdle !== undefined) this.setOperatorShowsIdle(valueObject.opIdle)
   }
 
   clone(): DefaultTallyConfiguration {

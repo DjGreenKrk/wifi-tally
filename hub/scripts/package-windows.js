@@ -52,18 +52,20 @@ function findNativeAddons(directory) {
 }
 const nativeAddons = findNativeAddons(serialportBindings)
 if (!nativeAddons.length) {
-  throw new Error('NodeMCU flasher requires serialport native bindings, but no .node addon was installed. Reinstall dependencies with Node 16 before building.')
+  throw new Error('NodeMCU flasher requires serialport native bindings, but no .node addon was installed. Reinstall dependencies with Node 24 before building.')
 }
 console.log('Including native serialport addon(s): ' + nativeAddons.map(file => path.relative(projectDir, file)).join(', '))
 
 const pkgArgs = [
-  'pkg', 'dist/server.js', '--targets', 'node16-win-x64',
+  'dist/server.js', '--config', 'package.json', '--targets', 'node24-win-x64',
   '--output', 'dist/vtally.exe',
-  '--assets', nativeAddons.map(file => path.relative(projectDir, file).replace(/\\/g, '/')).join(','),
 ]
+// The maintained pkg fork reads asset globs from package.json's pkg.assets;
+// its CLI no longer supports the legacy --assets flag.
+const pkgCli = require.resolve('@yao-pkg/pkg/lib-es5/bin.js')
 const result = spawnSync(
-  process.platform === 'win32' ? 'npx.cmd' : 'npx',
-  pkgArgs,
+  process.execPath,
+  [pkgCli, ...pkgArgs],
   { cwd: projectDir, stdio: 'inherit' },
 )
 

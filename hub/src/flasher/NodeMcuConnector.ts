@@ -38,32 +38,58 @@ export interface TallyProgramProgressType {
   error: boolean
 }
 
+class NodeMcuTimeoutError extends Error {}
+
 class NodeMcuConnector {
   nodemcu: any
+  // Native operations may finish AFTER their public timeout; the transport
+  // remains locked until the operation settles and the port is closed.
+  private pendingNativeOperations = new Set<Promise<unknown>>()
 
-  withMutex<T> (fn: () => T): Promise<T> {
+  async withMutex<T> (fn: () => T | Promise<T>): Promise<T> {
     if (!this.nodemcu) {
-      return Promise.reject(new Error('NodeMCU serial tool is unavailable. Verify serialport is installed and bundled in vtally.exe.'))
+      throw new Error('NodeMCU serial tool is unavailable. Verify serialport is installed and bundled in vtally.exe.')
     }
-    return new Promise((resolve, reject) => {
-      const interval = setInterval(() => {
-        const mutexAquired = tryToAquireMutex()
-        if (mutexAquired) {
-          clearInterval(interval)
-          if (this.nodemcu.isConnected()) {
-            console.warn("Serial terminal was not closed by previous process.")
-            this.nodemcu.disconnect()
-          }
-          resolve(true)
+    // Serialport is a singleton in the current NodeMCU tool: never start a
+    // second job while a timed-out native operation may still complete.
+    while (!tryToAquireMutex()) {
+      await this.sleep(100)
+    }
+    try {
+      if (this.nodemcu.isConnected()) {
+        console.warn('Serial terminal was not closed by previous process.')
+        await this.nodemcu.disconnect()
+        if (this.nodemcu.isConnected()) throw new Error('NodeMCU port remained open after disconnect')
+      }
+      return await fn()
+    } finally {
+      // If a native call is still pending, return the timeout/error to the
+      // caller now, but retain the global mutex until its LATE completion.
+      // Only then is it safe to close the port and allow the next job.
+      const pending = this.pendingNativeOperations.size > 0
+      const cleanup = this.releaseAfterTransportCleanup()
+      if (pending) {
+        void cleanup.catch(error => console.error('NodeMCU late transport cleanup failed:', error))
+      } else {
+        await cleanup
+      }
+    }
+  }
+
+  private async releaseAfterTransportCleanup(): Promise<void> {
+    try {
+      while (this.pendingNativeOperations.size > 0) {
+        await Promise.allSettled(Array.from(this.pendingNativeOperations))
+      }
+      if (this.nodemcu.isConnected()) {
+        await this.nodemcu.disconnect()
+        if (this.nodemcu.isConnected()) {
+          throw new Error('NodeMCU port remained open after cleanup')
         }
-      }, 100)
-    })
-    .then(() => {
-      return fn()
-    })
-    .finally(() => {
+      }
+    } finally {
       mutex = false
-    })
+    }
   }
 
   // injectable for easier testing
@@ -104,17 +130,39 @@ class NodeMcuConnector {
     })
   }
 
+  // A timeout is a caller-visible deadline, NOT native cancellation. Track
+  // the unresolved operation so withMutex retains the lock until it settles.
+  private async withTimeout<T>(operation: () => Promise<T>, ms: number, message: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const native = Promise.resolve().then(operation)
+    this.pendingNativeOperations.add(native)
+    void native.then(
+      () => { this.pendingNativeOperations.delete(native) },
+      () => { this.pendingNativeOperations.delete(native) },
+    )
+    try {
+      return await Promise.race([
+        native,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new NodeMcuTimeoutError(message)), ms)
+        }),
+      ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }
+
   // gracefull connection that retries a few times
   private async connect(path: string) {
-    await this.nodemcu.connect(path, baudRate, false)
+    await this.withTimeout(() => this.nodemcu.connect(path, baudRate, false), 5000, 'NodeMCU serial connect timed out')
 
     // check connection does not always work the first time, so we try it multiple times if necessary
     let retries = 3
     while (true) {
       try {
-        return await this.nodemcu.checkConnection()
+        return await this.withTimeout(() => this.nodemcu.checkConnection(), 3000, 'NodeMCU check timed out')
       } catch (e){
-        if (retries === 0) {
+        if (e instanceof NodeMcuTimeoutError || retries === 0) {
           throw e
         }
         await this.sleep(100)
@@ -200,9 +248,6 @@ class NodeMcuConnector {
       tallyDevice.errorMessage = e
       return tallyDevice
     }
-    finally {
-      if(this.nodemcu && this.nodemcu.isConnected()) { await this.nodemcu.disconnect() }
-    }
   }
 
   async program(path: string, onProgress: (state: TallyProgramProgressType) => void) {
@@ -259,9 +304,6 @@ class NodeMcuConnector {
       progress.error = true
       onProgress(progress)
       return false
-    }
-    finally {
-      if(this.nodemcu && this.nodemcu.isConnected()) { this.nodemcu.disconnect() }
     }
   }
 
@@ -320,33 +362,38 @@ class NodeMcuConnector {
       onProgress(progress)
       return false
     }
-    finally {
-      if(this.nodemcu && this.nodemcu.isConnected()) { this.nodemcu.disconnect() }
-    }
   }
 
   private async hardReset(path: string) {
-    await this.nodemcu.hardreset()
-    await this.nodemcu.disconnect()
-    await new Promise(resolve => { setTimeout(resolve, 1000) }) // sleep
+    await this.withTimeout(() => this.nodemcu.hardreset(), 5000, 'NodeMCU hard reset timed out')
+    await this.withTimeout(() => this.nodemcu.disconnect(), 5000, 'NodeMCU serial disconnect timed out')
+    await this.sleep(1000)
     await this.connect(path)
+    await this.sleep(3000)
 
-    await new Promise(resolve => { setTimeout(resolve, 3000) }) // sleep
-
-    const failTimeout = setTimeout(() => {
-      throw new Error("Could not connect to NodeMCU after hardreset.")
-    }, 10000)
-
-    let rebootSuccess = false
-    while(!rebootSuccess) {
+    // Do not throw from a timeout callback or poll the transport forever.
+    const deadline = Date.now() + 10000
+    let lastError: unknown
+    while (Date.now() < deadline) {
       try {
-        await this.nodemcu.checkConnection()
-        rebootSuccess = true
-      } catch (e) {
-        rebootSuccess = false
+        await this.withTimeout(
+          () => this.nodemcu.checkConnection(),
+          Math.max(1, Math.min(1500, deadline - Date.now())),
+          'NodeMCU check after reset timed out',
+        )
+        return
+      } catch (error) {
+        lastError = error
+        // A timed-out native check may still be active. Do not issue another
+        // serial command against the same transport until it has settled.
+        if (error instanceof NodeMcuTimeoutError) {
+          throw new Error('Could not connect to NodeMCU after hardreset: ' + String(error))
+        }
+        const remaining = deadline - Date.now()
+        if (remaining > 0) await this.sleep(Math.min(250, remaining))
       }
     }
-    clearTimeout(failTimeout)
+    throw new Error('Could not connect to NodeMCU after hardreset: ' + String(lastError))
   }
 
   /**
